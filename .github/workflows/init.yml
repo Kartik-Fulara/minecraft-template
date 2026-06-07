@@ -1,0 +1,102 @@
+name: Initialize Plugin Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloudflare_worker_url:
+        description: 'Your Cloudflare Worker URL'
+        required: true
+      cloudflare_auth_token:
+        description: 'Your Cloudflare Auth Token'
+        required: true
+      hub_repository:
+        description: 'Your Central Hub Repo (owner/repo)'
+        required: true
+      deploy_repo:
+        description: 'Deploy Repo for this plugin (owner/repo)'
+        required: true
+      notify_repo:
+        description: 'Notify Repo for this plugin (owner/repo)'
+        required: true
+      modrinth_slug:
+        description: 'Modrinth Project Slug (optional)'
+        required: false
+      tigris_bucket:
+        description: 'Tigris Database Bucket (optional)'
+        required: false
+
+jobs:
+  initialize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Register in Cloudflare Routing
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg repo        "${{ github.repository }}" \
+            --arg deploy_repo "${{ github.event.inputs.deploy_repo }}" \
+            --arg notify_repo "${{ github.event.inputs.notify_repo }}" \
+            --arg modrinth_id "${{ github.event.inputs.modrinth_slug }}" \
+            '{
+              repo:        $repo,
+              deploy_repo: $deploy_repo,
+              notify_repo: $notify_repo,
+              modrinth_id: $modrinth_id
+            }')
+          
+          echo "Registering routing for ${{ github.repository }}..."
+          HTTP_CODE=$(curl -s -o /tmp/cf_resp.json -w "%{http_code}" \
+            -X PUT \
+            -H "Authorization: Bearer ${{ github.event.inputs.cloudflare_auth_token }}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "${{ github.event.inputs.cloudflare_worker_url }}/api/routing")
+          
+          if [[ "$HTTP_CODE" != "200" ]]; then
+            echo "::error::Cloudflare registration failed with HTTP $HTTP_CODE"
+            cat /tmp/cf_resp.json
+            exit 1
+          fi
+          echo "Successfully registered in Cloudflare KV."
+
+      - name: Configure Repository Secrets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Setting HUB_REPOSITORY..."
+          gh secret set HUB_REPOSITORY --body "${{ github.event.inputs.hub_repository }}"
+          
+          echo "Setting CF_WORKER_URL..."
+          gh secret set CF_WORKER_URL --body "${{ github.event.inputs.cloudflare_worker_url }}"
+          
+          echo "Setting CF_AUTH_TOKEN..."
+          gh secret set CF_AUTH_TOKEN --body "${{ github.event.inputs.cloudflare_auth_token }}"
+          
+          if [[ -n "${{ github.event.inputs.tigris_bucket }}" ]]; then
+            echo "Setting TIGRIS_STORAGE_BUCKET..."
+            gh secret set TIGRIS_STORAGE_BUCKET --body "${{ github.event.inputs.tigris_bucket }}"
+          fi
+
+      - name: Unlock Maven Build
+        run: |
+          echo "Unlocking Maven build..."
+          touch .pipeline-ready
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add .pipeline-ready
+          git commit -m "ci: unlock pipeline (initialization complete)"
+          git push origin HEAD:${{ github.ref }}
+          
+      - name: Summary
+        run: |
+          echo "## Pipeline Initialized! 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "The following steps were completed:" >> $GITHUB_STEP_SUMMARY
+          echo "1. **Registered** in Cloudflare Routing KV." >> $GITHUB_STEP_SUMMARY
+          echo "2. **Configured** repository secrets (HUB_REPOSITORY, CF_*, TIGRIS_*)." >> $GITHUB_STEP_SUMMARY
+          echo "3. **Unlocked** Maven builds by creating \`.pipeline-ready\`." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> **Note:** You must still manually add \`HUB_PAT\` to your secrets for cross-repo dispatching." >> $GITHUB_STEP_SUMMARY

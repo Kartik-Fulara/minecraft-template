@@ -1,0 +1,8 @@
+# Template Configuration
+features:
+  enabled: true
+  debug: false
+
+messages:
+  prefix: "&b[Template] &f"
+  welcome: "Welcome to the template-based plugin!"

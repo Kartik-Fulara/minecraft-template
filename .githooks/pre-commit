@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# =============================================================================
+# .githooks/pre-commit
+# =============================================================================
+
+set -euo pipefail
+
+RED='\033[0;31m'
+YEL='\033[0;33m'
+GRN='\033[0;32m'
+BLU='\033[0;34m'
+NC='\033[0m'
+
+PASS="${GRN}✔${NC}"
+WARN="${YEL}⚠${NC}"
+FAIL="${RED}✖${NC}"
+
+errors=0
+warnings=0
+
+err()  { echo -e "${FAIL} ${RED}$*${NC}"; errors=$(( errors + 1 )); }
+warn() { echo -e "${WARN} ${YEL}$*${NC}"; warnings=$(( warnings + 1 )); }
+ok()   { echo -e "${PASS} $*"; }
+info() { echo -e "${BLU}▸${NC} $*"; }
+
+staged_content() { git show ":$1" 2>/dev/null || true; }
+staged_files() { git diff --cached --name-only --diff-filter=ACMR; }
+
+# ── 1. Conflict markers ──
+CONFLICT_FILES=$(staged_files | xargs grep -l '^<<<<<<< \|^=======$\|^>>>>>>> ' 2>/dev/null || true)
+[[ -n "$CONFLICT_FILES" ]] && err "Unresolved merge conflicts found."
+
+# ── 2. Debug code ──
+JAVA_FILES=$(staged_files | grep '\.java$' || true)
+if [[ -n "$JAVA_FILES" ]]; then
+  DEBUG_HITS=$(echo "$JAVA_FILES" | xargs grep -nE 'System\.(out|err)\.print|\.printStackTrace\(\)' 2>/dev/null || true)
+  [[ -n "$DEBUG_HITS" ]] && warn "Debug statements found."
+fi
+
+# ── 3. Version consistency ──
+if git diff --cached --name-only | grep -q '^VERSION$'; then
+  VERSION_FILE=$(staged_content "VERSION" | tr -d '[:space:]')
+else
+  VERSION_FILE=$(cat VERSION 2>/dev/null | tr -d '[:space:]' || true)
+fi
+
+if [[ -n "$VERSION_FILE" ]]; then
+  POM_VER=$(grep -m1 '<version>' pom.xml 2>/dev/null | sed 's/.*<version>\(.*\)<\/version>.*/\1/' | tr -d '[:space:]' || true)
+  [[ -n "$POM_VER" && "$POM_VER" != "$VERSION_FILE" ]] && err "pom.xml version ($POM_VER) != VERSION ($VERSION_FILE)"
+fi
+
+# ── 4. Main branch version bump ──
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+if [[ "$CURRENT_BRANCH" == "main" ]]; then
+  HEAD_VERSION=$(git show HEAD:VERSION 2>/dev/null | tr -d '[:space:]' || true)
+  if [[ -n "$HEAD_VERSION" && "$VERSION_FILE" == "$HEAD_VERSION" ]]; then
+    err "VERSION has not changed for main branch commit."
+  fi
+fi
+
+if (( errors > 0 )); then
+  echo -e "${RED}Pre-commit failed: $errors error(s).${NC}"
+  exit 1
+fi
+
+exit 0

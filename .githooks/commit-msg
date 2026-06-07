@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# =============================================================================
+# .githooks/commit-msg
+# =============================================================================
+
+COMMIT_MSG_FILE="$1"
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+RED='\033[0;31m'
+YEL='\033[0;33m'
+GRN='\033[0;32m'
+BLU='\033[0;34m'
+NC='\033[0m'
+
+case "$COMMIT_MSG" in
+  "Merge "*)            exit 0 ;;
+  "Revert "*)           exit 0 ;;
+  "chore(release):"*)   exit 0 ;;
+  "WIP"*|"wip"*)
+    echo -e "${RED}✖ WIP commits must be squashed before they reach main.${NC}"
+    exit 1
+    ;;
+esac
+
+TYPES="feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert"
+PATTERN="^(${TYPES})(\([a-zA-Z0-9_\-]+\))?!?:[[:space:]].+"
+
+FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
+
+if ! echo "$FIRST_LINE" | grep -Eq "$PATTERN"; then
+  echo -e "${RED}✖ Invalid commit message format.${NC}"
+  echo "  Required: <type>(<scope>): <description>"
+  exit 1
+fi
+
+DESC_LEN=${#FIRST_LINE}
+if (( DESC_LEN > 100 )); then
+  echo -e "${RED}✖ Commit subject line is ${DESC_LEN} characters — maximum is 100.${NC}"
+  exit 1
+fi
+
+echo -e "${GRN}✔ Commit message format is valid.${NC}"
+exit 0
